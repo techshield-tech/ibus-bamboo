@@ -24,9 +24,11 @@ import (
 	"ibus-bamboo/config"
 	"ibus-bamboo/ui"
 	"io/ioutil"
+	"log"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -37,8 +39,53 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-var dictionary = map[string]bool{}
-var emojiTrie = NewTrie()
+// Shared lookup data, published immutably via atomic.Value so FocusIn on
+// any engine instance can load them without racing key processing.
+var dictionary atomic.Value // map[string]bool
+var emojiTrie atomic.Value  // *TrieNode
+var emojiLoadMu sync.Mutex
+var dictLoadMu sync.Mutex
+
+func init() {
+	emojiTrie.Store(NewTrie())
+}
+
+// currentEmojiTrie returns the loaded emoji trie, or an empty one when the
+// data file has not been (or could not be) loaded yet.
+func currentEmojiTrie() *TrieNode {
+	if trie, ok := emojiTrie.Load().(*TrieNode); ok && trie != nil {
+		return trie
+	}
+	return NewTrie()
+}
+
+// ensureLazyData loads the emoji trie and the spelling dictionary on first
+// use. Failures are logged, never fatal: the engine keeps working with
+// the corresponding feature effectively disabled.
+func (e *IBusBambooEngine) ensureLazyData(emojiShortcut bool, ibflags uint) {
+	if emojiShortcut && len(currentEmojiTrie().Children) == 0 {
+		emojiLoadMu.Lock()
+		if len(currentEmojiTrie().Children) == 0 {
+			if trie, err := loadEmojiOne(DictEmojiOne); err != nil {
+				log.Printf("failed to load emoji data from %s: %s", DictEmojiOne, err)
+			} else {
+				emojiTrie.Store(trie)
+			}
+		}
+		emojiLoadMu.Unlock()
+	}
+	if ibflags&config.IBspellCheckWithDicts != 0 {
+		dictLoadMu.Lock()
+		if d, _ := dictionary.Load().(map[string]bool); len(d) == 0 {
+			if loaded, err := loadDictionary(DictVietnameseCm); err != nil {
+				log.Printf("failed to load dictionary from %s: %s", DictVietnameseCm, err)
+			} else {
+				dictionary.Store(loaded)
+			}
+		}
+		dictLoadMu.Unlock()
+	}
+}
 
 // sessionInputMode is the mode chosen while the focused window class is
 // unavailable. It lasts for this ibus-bamboo process and is kept out of
@@ -79,14 +126,17 @@ func (e *IBusBambooEngine) isShortcutKeyEnable(ski uint) bool {
 }
 
 func (e *IBusBambooEngine) init() {
-	initConfigFiles(e.engineName)
+	// Config file setup must not crash the daemon when the home directory
+	// is missing or read-only; the engine still works with defaults.
+	if err := initConfigFiles(e.engineName); err != nil {
+		log.Printf("initConfigFiles: %s", err)
+	}
 }
 
-func initConfigFiles(engineName string) {
+func initConfigFiles(engineName string) error {
 	if sta, err := os.Stat(config.GetConfigDir(engineName)); err != nil || !sta.IsDir() {
-		err = os.Mkdir(config.GetConfigDir(engineName), 0777)
-		if err != nil {
-			panic(err)
+		if err := os.Mkdir(config.GetConfigDir(engineName), 0777); err != nil {
+			return err
 		}
 	}
 	macroPath := config.GetMacroPath(engineName)
@@ -94,13 +144,13 @@ func initConfigFiles(engineName string) {
 		sampleFile := getEngineSubFile(sampleMactabFile)
 		sample, err := ioutil.ReadFile(sampleFile)
 		if err != nil {
-			panic(err)
+			return err
 		}
-		err = ioutil.WriteFile(macroPath, sample, 0644)
-		if err != nil {
-			panic(err)
+		if err := ioutil.WriteFile(macroPath, sample, 0644); err != nil {
+			return err
 		}
 	}
+	return nil
 }
 
 // keyPressCapturing drains this engine's own queue sequentially. The lock
@@ -198,7 +248,9 @@ func (e *IBusBambooEngine) processShortcutKey(keyVal, keyCode, state uint32) (bo
 		return true, e.hexadecimalProcessKeyEvent(keyVal, keyCode, state)
 	}
 
-	if e.config.DefaultInputMode == config.UsIM {
+	// An engine whose default mode is UsIM (e.g. BambooUs) forwards everything,
+	// but a per-window mapping to a Vietnamese mode still takes effect.
+	if e.config.DefaultInputMode == config.UsIM && e.checkInputMode(config.UsIM) {
 		return true, false
 	}
 	if e.isShortcutKeyPressed(keyVal, state, KSRestoreKeyStrokes) {
@@ -209,7 +261,8 @@ func (e *IBusBambooEngine) processShortcutKey(keyVal, keyCode, state uint32) (bo
 	// fmt.Println("===Process shortcut for input method switcher")
 	if e.isShortcutKeyPressed(keyVal, state, KSViEnSwitch) {
 		e.englishMode = !e.englishMode
-		notify(e.englishMode)
+		// Asynchronous: the notification round-trip must not stall input.
+		go notify(e.englishMode)
 		e.resetBuffer()
 		return true, true
 	}
@@ -455,11 +508,16 @@ func (e *IBusBambooEngine) getCommitText(keyVal, keyCode, state uint32) (newText
 			} else {
 				newText = e.getProcessedString(bamboo.VietnameseMode)
 			}
-			if fullSeq := e.preeditor.GetProcessedString(bamboo.VietnameseMode); len(fullSeq) > 0 && rune(fullSeq[len(fullSeq)-1]) == keyRune {
+			// Compare last runes, not last bytes: custom input methods may
+			// define multi-byte appending keys.
+			if fullSeq := []rune(e.preeditor.GetProcessedString(bamboo.VietnameseMode)); len(fullSeq) > 0 && fullSeq[len(fullSeq)-1] == keyRune {
 				// [[ => [
 				var ret = e.getPreeditString()
-				var lastRune = rune(ret[len(ret)-1])
-				var isWordBreakRune = bamboo.IsWordBreakSymbol(lastRune)
+				var retRunes = []rune(ret)
+				if len(retRunes) == 0 {
+					return ret, false
+				}
+				var isWordBreakRune = bamboo.IsWordBreakSymbol(retRunes[len(retRunes)-1])
 				// TODO: THIS IS A HACK
 				if isWordBreakRune {
 					e.preeditor.RemoveLastChar(false)

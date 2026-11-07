@@ -82,6 +82,13 @@ func NewIbusBambooEngine(name string, cfg *config.Config, base IEngine, preedito
 		preeditor:  preeditor,
 		config:     cfg,
 	}
+	// Initialized here (not in the async init) so no key/focus/property
+	// handler can observe a nil emoji engine or macro table on startup.
+	e.emoji = NewEmojiEngine()
+	e.macroTable = NewMacroTable(cfg.IBflags&config.IBautoCapitalizeMacro != 0)
+	if cfg.IBflags&config.IBmacroEnabled != 0 {
+		e.macroTable.Enable(name)
+	}
 	e.keyPressChan = make(chan [3]uint32, 100)
 	go e.keyPressCapturing()
 	return e
@@ -126,29 +133,19 @@ func (e *IBusBambooEngine) ProcessKeyEvent(keyVal uint32, keyCode uint32, state 
 
 func (e *IBusBambooEngine) FocusIn() *dbus.Error {
 	log.Print("FocusIn.")
+	// Slow lookups stay outside the engine lock.
 	var latestWm = e.getLatestWmClass()
 	e.Lock()
 	e.checkWmClass(latestWm)
 	propList := e.propList
+	emojiShortcut := e.isShortcutKeyEnable(KSEmojiDialog)
+	ibflags := e.config.IBflags
 	e.surroundingTextReady = true
 	e.Unlock()
 	e.RegisterProperties(propList)
 	e.RequireSurroundingText()
-	if e.isShortcutKeyEnable(KSEmojiDialog) && emojiTrie != nil && len(emojiTrie.Children) == 0 {
-		if trie, err := loadEmojiOne(DictEmojiOne); err != nil {
-			log.Printf("failed to load emoji data from %s: %s", DictEmojiOne, err)
-		} else {
-			emojiTrie = trie
-		}
-	}
-	if e.config.IBflags&config.IBspellCheckWithDicts != 0 && len(dictionary) == 0 {
-		if d, err := loadDictionary(DictVietnameseCm); err != nil {
-			log.Printf("failed to load dictionary from %s: %s", DictVietnameseCm, err)
-		} else {
-			dictionary = d
-		}
-	}
-	fmt.Printf("WM_CLASS=(%s)\n", e.getWmClass())
+	e.ensureLazyData(emojiShortcut, ibflags)
+	fmt.Printf("WM_CLASS=(%s)\n", latestWm)
 	return nil
 }
 
@@ -433,7 +430,11 @@ func (e *IBusBambooEngine) PropertyActivate(propName string, propState uint32) *
 		if propState == ibus.PROP_STATE_CHECKED {
 			e.config.IBflags |= config.IBspellCheckWithDicts
 			turnSpellChecking(true)
-			dictionary, _ = loadDictionary(DictVietnameseCm)
+			if d, err := loadDictionary(DictVietnameseCm); err != nil {
+				log.Printf("failed to load dictionary from %s: %s", DictVietnameseCm, err)
+			} else {
+				dictionary.Store(d)
+			}
 		} else {
 			e.config.IBflags &= ^config.IBspellCheckWithDicts
 		}

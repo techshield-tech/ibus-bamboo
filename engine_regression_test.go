@@ -183,3 +183,90 @@ func TestConcurrentEngineHammer(t *testing.T) {
 		t.Fatalf("deadlock under concurrent engine use")
 	}
 }
+
+func TestDetermineMacroCaseEmpty(t *testing.T) {
+	if got := determineMacroCase(""); got != VnCaseNoChange {
+		t.Errorf("determineMacroCase(\"\") = %d, want VnCaseNoChange", got)
+	}
+	if got := determineMacroCase("vn"); got != VnCaseAllSmall {
+		t.Errorf("determineMacroCase(vn) = %d, want VnCaseAllSmall", got)
+	}
+	if got := determineMacroCase("VN"); got != VnCaseAllCapital {
+		t.Errorf("determineMacroCase(VN) = %d, want VnCaseAllCapital", got)
+	}
+	if got := determineMacroCase("Vn"); got != VnCaseNoChange {
+		t.Errorf("determineMacroCase(Vn) = %d, want VnCaseNoChange", got)
+	}
+}
+
+func TestEmojiCursorPosBounds(t *testing.T) {
+	e, _ := newRegressionEngine(config.PreeditIM)
+	lt := ibus.NewLookupTable()
+	lt.PageSize = uint32(EmojiMaxPageSize)
+	for i := 0; i < 10; i++ {
+		lt.AppendCandidate(string(rune('a' + i)))
+	}
+	lt.SetCursorPos(9)
+	e.emojiLookupTable = lt
+	if e.updateCursorPosInEmojiTable(1) {
+		t.Errorf("updateCursorPosInEmojiTable accepted out-of-range pos %d (len=%d)", lt.CursorPos, len(lt.Candidates))
+	}
+	if lt.CursorPos != 9 {
+		t.Errorf("CursorPos = %d, want unchanged 9", lt.CursorPos)
+	}
+	if !e.updateCursorPosInEmojiTable(0) || lt.CursorPos != 9 {
+		t.Errorf("updateCursorPosInEmojiTable(0) = pos %d, want 9", lt.CursorPos)
+	}
+}
+
+func TestUsIMDefaultHonorsWindowMapping(t *testing.T) {
+	fe := NewFakeEngine()
+	cfg := config.DefaultCfg()
+	cfg.DefaultInputMode = config.UsIM
+	cfg.InputModeMapping["test:test"] = config.PreeditIM
+	im := bamboo.ParseInputMethod(cfg.InputMethodDefinitions, cfg.InputMethod)
+	e := NewIbusBambooEngine("test", &cfg, fe, bamboo.NewEngine(im, cfg.Flags))
+	e.wmClasses = "test:test"
+	if ret, _ := e.ProcessKeyEvent(IBusTilde, 0, IBusShiftMask); !ret || !e.isInputModeLTOpened {
+		t.Errorf("mapped Preedit window: input-mode switch ignored (ret=%v open=%v)", ret, e.isInputModeLTOpened)
+	}
+
+	e2 := NewIbusBambooEngine("test", &cfg, fe, bamboo.NewEngine(im, cfg.Flags))
+	e2.wmClasses = "other:other"
+	if ret, _ := e2.ProcessKeyEvent(IBusTilde, 0, IBusShiftMask); ret || e2.isInputModeLTOpened {
+		t.Errorf("unmapped UsIM window: switch should stay closed (ret=%v open=%v)", ret, e2.isInputModeLTOpened)
+	}
+	if ret, _ := e2.ProcessKeyEvent('d', 'd', 0); ret {
+		t.Errorf("unmapped UsIM window: keys should be forwarded (return false)")
+	}
+}
+
+func TestMacroTableConcurrentAccess(t *testing.T) {
+	mt := NewMacroTable(false)
+	mt.mTable = map[string]string{"vn": "viet nam", "v": "v"}
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				if mt.GetText("vn") == "" {
+					t.Errorf("macro text lost under concurrency")
+					return
+				}
+				mt.HasKey("vn")
+				mt.HasPrefix("v")
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			mt.Enable("test-race-nonexistent")
+			mt.Reload("test-race-nonexistent", false)
+		}
+	}()
+	wg.Wait()
+	mt.Disable()
+}
