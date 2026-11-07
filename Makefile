@@ -23,7 +23,7 @@ engine_name=bamboo
 engine_gui_name=ibus-setup-Bamboo.desktop
 ibus_e_name=ibus-engine-$(engine_name)
 pkg_name=ibus-$(engine_name)
-version=0.8.5
+version=$(shell cat data/bamboo-version)
 
 engine_dir=$(PREFIX)/share/$(pkg_name)
 ibus_dir=$(PREFIX)/share/ibus
@@ -41,7 +41,12 @@ build:
 	$(SHELL) scripts/build
 
 test:
+	$(SHELL) scripts/set-version --check
 	$(SHELL) scripts/test
+
+# Bump the version everywhere: make version V=0.8.6
+version:
+	$(SHELL) scripts/set-version $(V)
 
 clean:
 	rm -f ibus-engine-bamboo
@@ -83,4 +88,4 @@ deb: clean
 	dpkg-buildpackage
 	rm -rf debian
 
-.PHONY: build clean build install uninstall src rpm deb
+.PHONY: build clean build install uninstall src rpm deb test version

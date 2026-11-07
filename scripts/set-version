@@ -1,0 +1,78 @@
+#!/bin/sh
+# Keep every versioned file in sync with data/bamboo-version.
+#
+#   scripts/set-version 0.8.6   write 0.8.6 to data/bamboo-version, update files
+#   scripts/set-version         update files from data/bamboo-version
+#   scripts/set-version --check fail if any file disagrees (run by make test)
+#
+# The packaging files stay committed so that packagers who use them
+# straight from the source tree keep working.
+set -eu
+
+cd "$(dirname "$0")/.."
+version_file=data/bamboo-version
+
+check=0
+case "${1:-}" in
+	--check) check=1 ;;
+	"") ;;
+	*)
+		if ! printf '%s\n' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)+$'; then
+			echo "set-version: invalid version '$1' (expected e.g. 0.8.6)" >&2
+			exit 2
+		fi
+		printf '%s\n' "$1" > "$version_file"
+		;;
+esac
+
+v=$(tr -d ' \n' < "$version_file")
+
+# One sed program per file: the lines that carry the version.
+rewrite() {
+	case "$1" in
+	build/arch/PKGBUILD-*)
+		sed "s/^pkgver=.*/pkgver=$v/" "$1" ;;
+	build/deb/control)
+		sed "s/^Standards-Version: .*/Standards-Version: $v/" "$1" ;;
+	build/deb/ibus-bamboo.dsc)
+		sed -e "s/^Version: .*/Version: $v-0/" \
+			-e "s/ibus-bamboo-[0-9.]*\.tar\.gz/ibus-bamboo-$v.tar.gz/" "$1" ;;
+	build/rpm/ibus-bamboo.spec)
+		sed "s/^Version: .*/Version: $v/" "$1" ;;
+	data/bamboo.xml | data/bamboo-freebsd.xml)
+		sed "s|<version>.*</version>|<version>$v</version>|" "$1" ;;
+	esac
+}
+
+files="build/arch/PKGBUILD-git build/arch/PKGBUILD-obs build/arch/PKGBUILD-release
+build/deb/control build/deb/ibus-bamboo.dsc build/rpm/ibus-bamboo.spec
+data/bamboo.xml data/bamboo-freebsd.xml"
+
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+stale=0
+for f in $files; do
+	rewrite "$f" > "$tmp"
+	if cmp -s "$f" "$tmp"; then
+		continue
+	fi
+	if [ "$check" = 1 ]; then
+		echo "set-version: $f does not match $version_file ($v)" >&2
+		stale=1
+	else
+		cat "$tmp" > "$f"
+		echo "updated $f"
+	fi
+done
+
+# The Debian changelog needs a real entry, so it is only checked.
+deb_v=$(sed -n '1s/^[^(]*(\([^)]*\)).*/\1/p' build/deb/changelog)
+if [ "$deb_v" != "$v" ]; then
+	echo "set-version: build/deb/changelog starts at $deb_v, add an entry for $v" >&2
+	[ "$check" = 1 ] && stale=1
+fi
+
+if [ "$stale" = 1 ]; then
+	echo "run: scripts/set-version" >&2
+	exit 1
+fi

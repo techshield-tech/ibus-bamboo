@@ -7,7 +7,7 @@
 
   outputs = { self, nixpkgs }:
     let
-      version = "v0.8.5";
+      version = "v" + builtins.replaceStrings [ "\n" ] [ "" ] (builtins.readFile ./data/bamboo-version);
 
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
 

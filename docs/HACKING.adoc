@@ -51,6 +51,17 @@ Lúc này bạn có thể gõ chương trình bằng tiếng Việt.
 
 Tùy các linux hay bsd bạn sẽ cần phải cài đặt phụ thuộc trên hệ thống trước khi biên dịch chương trình. Bạn có thể tham khảo trên link:https://github.com/BambooEngine/ibus-bamboo/wiki/H%C6%B0%E1%BB%9Bng-d%E1%BA%ABn-c%C3%A0i-%C4%91%E1%BA%B7t-t%E1%BB%AB-m%C3%A3-ngu%E1%BB%93n[Wiki] nếu hệ thống của bạn đã được ghi lại.
 
+=== Đổi số phiên bản (Bumping the version)
+
+Số phiên bản chỉ được ghi ở `data/bamboo-version`. Makefile, `scripts/build`, `scripts/install` và `flake.nix` đọc từ file này. Các file đóng gói (PKGBUILD, spec, dsc, control, `data/bamboo*.xml`) vẫn được commit để người đóng gói dùng trực tiếp, và được cập nhật bằng:
+
+[bash]
+----
+make version V=0.8.6
+----
+
+Sau đó thêm một mục cho phiên bản mới vào `build/deb/changelog`. `make test` sẽ báo lỗi nếu có file nào lệch với `data/bamboo-version`.
+
 == Cấu trúc dự án (Project Structure)
 
 **Sẽ được ghi chép lại trong tương lai. Hãy chờ nhé <3**
