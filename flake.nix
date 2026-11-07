@@ -34,11 +34,14 @@
             ];
 
             buildInputs = [
-              pkgs.xorg.libXtst
+              pkgs.libxtst
             ];
 
             preConfigure = ''
               export GOCACHE="$TMPDIR/go-cache"
+              # Never try to download a newer Go toolchain: the sandbox has no
+              # network or $HOME, so fail with a clear version error instead.
+              export GOTOOLCHAIN=local
               sed -i "s,/usr,$out," data/bamboo.xml
             '';
 
@@ -66,7 +69,7 @@
             ];
 
             buildInputs = [
-              pkgs.xorg.libXtst
+              pkgs.libxtst
             ];
           };
         }
