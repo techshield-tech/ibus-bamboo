@@ -2,7 +2,9 @@ package main
 
 import (
 	"ibus-bamboo/config"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/BambooEngine/bamboo-core"
 	ibus "github.com/BambooEngine/goibus"
@@ -119,5 +121,65 @@ func TestSetSurroundingTextRebuildsBuffer(t *testing.T) {
 	e.SetSurroundingText(dbus.MakeVariant(*ibus.NewText("hello world")), 5, 2)
 	if got := e.getRawKeyLen(); got != 5 {
 		t.Errorf("selection must be ignored, rawKeyLen = %d, want 5", got)
+	}
+}
+
+func TestPerEngineQueueIsolation(t *testing.T) {
+	e1, fe1 := newRegressionEngine(config.SurroundingTextIM)
+	e2, fe2 := newRegressionEngine(config.SurroundingTextIM)
+	e1.shouldEnqueuKeyStrokes = true
+	e2.shouldEnqueuKeyStrokes = true
+	if ok, _ := e1.ProcessKeyEvent('d', 'd', 0); !ok {
+		t.Fatalf("key not accepted")
+	}
+	if ok, _ := e1.ProcessKeyEvent('u', 'u', 0); !ok {
+		t.Fatalf("key not accepted")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if fe1.getCommitText() == "du" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fe1.getCommitText() != "du" {
+		t.Errorf("engine1 commit = %q, want %q", fe1.getCommitText(), "du")
+	}
+	if fe2.getCommitText() != "" {
+		t.Errorf("engine1 keystrokes leaked onto engine2: %q", fe2.getCommitText())
+	}
+	if got := e2.getRawKeyLen(); got != 0 {
+		t.Errorf("engine2 buffer len = %d, want 0", got)
+	}
+}
+
+func TestConcurrentEngineHammer(t *testing.T) {
+	e, _ := newRegressionEngine(config.SurroundingTextIM)
+	e.shouldEnqueuKeyStrokes = true
+	var wg sync.WaitGroup
+	keys := []rune(" engine ")
+	for g := 0; g < 3; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i, k := range keys {
+				e.ProcessKeyEvent(uint32(k), uint32(k), 0)
+				if i%3 == 0 {
+					e.Reset()
+				}
+			}
+			e.ProcessKeyEvent(IBusBackSpace, 0, 0)
+			e.FocusOut()
+			e.SetCapabilities(0)
+			e.PageUp()
+			e.CandidateClicked(0, 1, 0)
+		}(g)
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("deadlock under concurrent engine use")
 	}
 }
