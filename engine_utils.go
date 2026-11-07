@@ -636,17 +636,7 @@ func (e *IBusBambooEngine) getWmClass() string {
 }
 
 func (e *IBusBambooEngine) getLatestWmClass() string {
-	var wmClass string
-	if isGnome {
-		wmClass, _ = gnomeGetFocusWindowClass()
-	} else if isWayland {
-		wmClass = getWlAppId()
-	}
-	if wmClass == "" {
-		wmClass = x11GetFocusWindowClass()
-	}
-	wmClass = strings.Replace(wmClass, "\"", "", -1)
-	return wmClass
+	return getFocusWindowClass()
 }
 
 func (e *IBusBambooEngine) checkInputMode(im int) bool {

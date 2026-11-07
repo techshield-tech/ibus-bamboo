@@ -26,6 +26,12 @@ type Config struct {
 	Shortcuts              [10]uint32
 	DefaultInputMode       int
 	InputModeMapping       map[string]int
+	// Introspector picks how the focused application is detected:
+	// "auto" (default), "x11", "gnome", "wayland" or "command".
+	Introspector string
+	// IntrospectorCommand is run through /bin/sh on every focus change when
+	// Introspector is "command"; the first line it prints is the app id.
+	IntrospectorCommand string
 }
 
 func GetConfigDir(ngName string) string {
@@ -54,6 +60,7 @@ func DefaultCfg() Config {
 		Shortcuts:              [10]uint32{1, 126, 0, 0, 0, 0, 0, 0, 5, 117},
 		DefaultInputMode:       PreeditIM,
 		InputModeMapping:       map[string]int{},
+		Introspector:           "auto",
 	}
 }
 
