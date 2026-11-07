@@ -161,6 +161,18 @@ To switch between typing modes, simply click on an input box (a box to enter tex
  - To type the character `~`, press the combination <kbd>Shift</kbd>+<kbd>~</kbd> twice.
  - Support for Wayland in IBus is not yet ideal. For a better typing experience, please use Xorg.
 
+### Choosing how the focused app is detected
+To remember a typing mode per application, `ibus-bamboo` needs to know which app has focus. By default (`auto`) it guesses from the session: GNOME, Wayland (wlroots) or X11. If your window manager is not supported, you can give it a command that prints the focused window's `app_id`/`WM_CLASS`, in `~/.config/ibus-bamboo/ibus-bamboo.config.json`:
+
+```json
+"Introspector": "command",
+"IntrospectorCommand": "swaymsg -t get_tree | jq -r '.. | select(.focused?) | .app_id // .window_properties.class'"
+```
+
+- `Introspector` is one of `auto`, `x11`, `gnome`, `wayland`, `command`.
+- The command runs through `/bin/sh` on every focus change; its first line of output is used, and it is stopped after 0.5 seconds. If it prints nothing, X11 is tried instead.
+- Restart IBus (`ibus restart`) for the change to take effect.
+
 ## Bug reports
 Before submitting a question or bug report, please ensure you have read through [these common issues](https://github.com/BambooEngine/ibus-bamboo/wiki/C%C3%A1c-v%E1%BA%A5n-%C4%91%E1%BB%81-th%C6%B0%E1%BB%9Dng-g%E1%BA%B7p) and see if you can resolve the problem on your own. If you still encounter issues after trying these steps, or you don't see something similar to your issue listed, please submit a bug report in the [Bamboo issue tracker](https://github.com/BambooEngine/ibus-bamboo/issues)
 

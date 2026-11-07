@@ -157,6 +157,18 @@ sudo xbps-install -S ibus-bamboo
 - Để gõ ký tự `~` hãy nhấn tổ hợp <kbd>Shift</kbd>+<kbd>~</kbd> 2 lần.
 - Hỗ trợ Wayland trong IBus hiện chưa tốt lắm. Để có trải nghiệm gõ phím tốt hơn, hãy sử dụng Xorg.
 
+### Tự chọn cách nhận diện ứng dụng
+Để nhớ chế độ gõ cho từng ứng dụng, `ibus-bamboo` cần biết ứng dụng nào đang được focus. Mặc định (`auto`) bộ gõ tự đoán theo phiên làm việc: GNOME, Wayland (wlroots) hoặc X11. Nếu trình quản lý cửa sổ của bạn không được hỗ trợ, có thể chỉ định một câu lệnh trả về `app_id`/`WM_CLASS` của cửa sổ đang focus, trong file `~/.config/ibus-bamboo/ibus-bamboo.config.json`:
+
+```json
+"Introspector": "command",
+"IntrospectorCommand": "swaymsg -t get_tree | jq -r '.. | select(.focused?) | .app_id // .window_properties.class'"
+```
+
+- `Introspector` nhận một trong các giá trị `auto`, `x11`, `gnome`, `wayland`, `command`.
+- Câu lệnh được chạy qua `/bin/sh` mỗi khi đổi focus, lấy dòng đầu tiên nó in ra, và bị dừng nếu chạy quá 0,5 giây. Khi câu lệnh không trả về gì, bộ gõ thử lại bằng X11.
+- Cần khởi động lại IBus (`ibus restart`) để thay đổi có hiệu lực.
+
 ## Báo lỗi
 Trước khi báo lỗi vui lòng đọc [những vấn đề thường gặp](https://github.com/BambooEngine/ibus-bamboo/wiki/C%C3%A1c-v%E1%BA%A5n-%C4%91%E1%BB%81-th%C6%B0%E1%BB%9Dng-g%E1%BA%B7p) và tìm vấn đề của mình ở trong đó.
 
